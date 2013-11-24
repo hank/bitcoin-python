@@ -47,3 +47,5 @@ class DStruct(object):
             module=self.__class__.__module__, classname=self.__class__.__name__,
             slots=", ".join('{k}={v!r}'.format(k=k, v=v) for k, v in
                             self.__dict__.items()))
+    def get_dict(self):
+        return self.__dict__

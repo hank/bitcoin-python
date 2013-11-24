@@ -25,7 +25,6 @@ except ImportError:
     import httplib
 import base64
 import json
-import decimal
 try:
     import urllib.parse as urlparse
 except ImportError:
@@ -49,39 +48,43 @@ class HTTPTransport(object):
         self.service_url = service_url
         self.parsed_url = urlparse.urlparse(service_url)
         if self.parsed_url.port is None:
-            port = 80
+            self.port = 80
         else:
-            port = self.parsed_url.port
+            self.port = self.parsed_url.port
         authpair = "%s:%s" % (self.parsed_url.username,
                               self.parsed_url.password)
         authpair = authpair.encode('utf8')
         self.auth_header = "Basic ".encode('utf8') + base64.b64encode(authpair)
-        if self.parsed_url.scheme == 'https':
-            self.connection = httplib.HTTPSConnection(self.parsed_url.hostname,
-                                                      port, None, None, False,
-                                                      HTTP_TIMEOUT)
-        else:
-            self.connection = httplib.HTTPConnection(self.parsed_url.hostname,
-                                                     port, False, HTTP_TIMEOUT)
 
     def request(self, serialized_data):
-        self.connection.request('POST', self.parsed_url.path, serialized_data,
-                                {'Host': self.parsed_url.hostname,
-                                 'User-Agent': USER_AGENT,
-                                 'Authorization': self.auth_header,
-                                 'Content-type': 'application/json'})
+        if self.parsed_url.scheme == 'https':
+            connection = httplib.HTTPSConnection(self.parsed_url.hostname,
+                                                 self.port, None, None, False,
+                                                 HTTP_TIMEOUT)
+        else:
+            connection = httplib.HTTPConnection(self.parsed_url.hostname,
+                                                self.port, False, HTTP_TIMEOUT)
+        try:
+            connection.request('POST', self.parsed_url.path, serialized_data,
+                                    {'Host': self.parsed_url.hostname,
+                                     'User-Agent': USER_AGENT,
+                                     'Authorization': self.auth_header,
+                                     'Content-type': 'application/json'})
 
-        httpresp = self.connection.getresponse()
-        if httpresp is None:
-            self._raise_exception({
-                'code': -342, 'message': 'missing HTTP response from server'})
-        elif httpresp.status == httplib.FORBIDDEN:
-            msg = "bitcoind returns 403 Forbidden. Is your IP allowed?"
-            raise TransportException(msg, code=403,
-                                     protocol=self.parsed_url.scheme,
-                                     raw_detail=httpresp)
+            httpresp = connection.getresponse()
 
-        resp = httpresp.read()
+            if httpresp is None:
+                self._raise_exception({
+                    'code': -342, 'message': 'missing HTTP response from server'})
+            elif httpresp.status == httplib.FORBIDDEN:
+                msg = "bitcoind returns 403 Forbidden. Is your IP allowed?"
+                raise TransportException(msg, code=403,
+                                         protocol=self.parsed_url.scheme,
+                                         raw_detail=httpresp)
+
+            resp = httpresp.read()
+        finally:
+            connection.close()
         return resp.decode('utf8')
 
 
@@ -97,7 +100,7 @@ class FakeTransport(object):
         self._data[method_name].append(json.dumps(fixture))
 
     def request(self, serialized_data):
-        data = json.loads(serialized_data, parse_float=decimal.Decimal)
+        data = json.loads(serialized_data, parse_float=str)
         method_name = data['method']
         return self._data[method_name].popleft()
 
@@ -119,9 +122,11 @@ class RPCMethod(object):
                 'id': self._service_proxy._id_counter}
         postdata = json.dumps(data)
         resp = self._service_proxy._transport.request(postdata)
-        resp = json.loads(resp, parse_float=decimal.Decimal)
-
-        if resp['error'] is not None:
+        try:
+            resp = json.loads(resp, parse_float=str)
+        except:
+            raise ValueError, "{} failed to JSON decode".format(resp)
+        if 'error' in resp and resp['error'] is not None:
             self._service_proxy._raise_exception(resp['error'])
         elif 'result' not in resp:
             self._service_proxy._raise_exception({
